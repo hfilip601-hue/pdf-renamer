@@ -1,0 +1,73 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'rename_pdfs_varsym.py'
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Chocolatey
+        uses: crazy-max/ghaction-chocolatey@v3
+        with:
+          upgrade: true
+
+      - name: Install mdbtools via Chocolatey
+        run: choco install mdbtools --version=1.0.0 -y
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pandas pypdf pyinstaller
+
+      - name: Verify mdbtools availability
+        run: |
+          mdb-tables --version
+          mdb-export --version
+
+      - name: Build executable with PyInstaller
+        run: |
+          pyinstaller --onefile --name rename_pdfs_varsym ^
+            --hidden-import pandas ^
+            --hidden-import pypdf ^
+            --hidden-import tkinter ^
+            --hidden-import tkinter.ttk ^
+            --hidden-import tkinter.filedialog ^
+            --hidden-import tkinter.messagebox ^
+            --hidden-import tkinter.scrolledtext ^
+            --collect-submodules pandas ^
+            rename_pdfs_varsym.py
+
+      - name: Verify executable
+        run: |
+          dist\rename_pdfs_varsym.exe --help
+
+      - name: Upload Windows EXE as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rename_pdfs_varsym-windows
+          path: dist/rename_pdfs_varsym.exe
+          retention-days: 30
+
+      - name: Create release (on tag push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/rename_pdfs_varsym.exe
+          generate_release_notes: true
