@@ -5,6 +5,7 @@ on:
     branches: [main, master]
     paths:
       - 'rename_pdfs_varsym.py'
+      - 'rename_pdfs_varsym_windows.spec'
       - '.github/workflows/build-windows.yml'
   workflow_dispatch:
 
@@ -31,28 +32,41 @@ jobs:
       - name: Install mdbtools via Chocolatey
         run: choco install mdbtools --version=1.0.0 -y
 
+      - name: Copy mdbtools to project for bundling
+        run: |
+          # Chocolatey installs to C:\ProgramData\chocolatey\lib\mdbtools\tools\
+          $chocoPath = "C:\ProgramData\chocolatey\lib\mdbtools\tools"
+          if (Test-Path $chocoPath) {
+            # Create mdbtools directory structure
+            New-Item -ItemType Directory -Force -Path "mdbtools\bin"
+            New-Item -ItemType Directory -Force -Path "mdbtools\lib"
+
+            # Copy executables to bin/
+            Copy-Item "$chocoPath\*.exe" "mdbtools\bin\" -Force
+
+            # Copy DLLs to lib/
+            Copy-Item "$chocoPath\*.dll" "mdbtools\lib\" -Force
+
+            # Also copy any DLLs in root to lib/
+            Get-ChildItem "$chocoPath\*.dll" | ForEach-Object {
+              Copy-Item $_.FullName "mdbtools\" -Force
+            }
+
+            Write-Host "mdbtools copied successfully"
+            Get-ChildItem "mdbtools" -Recurse
+          } else {
+            Write-Error "Chocolatey mdbtools not found at $chocoPath"
+            exit 1
+          }
+
       - name: Install Python dependencies
         run: |
           pip install --upgrade pip
           pip install pandas pypdf pyinstaller
 
-      - name: Verify mdbtools availability
+      - name: Build executable with PyInstaller (using spec file)
         run: |
-          mdb-tables --version
-          mdb-export --version
-
-      - name: Build executable with PyInstaller
-        run: |
-          pyinstaller --onefile --name rename_pdfs_varsym ^
-            --hidden-import pandas ^
-            --hidden-import pypdf ^
-            --hidden-import tkinter ^
-            --hidden-import tkinter.ttk ^
-            --hidden-import tkinter.filedialog ^
-            --hidden-import tkinter.messagebox ^
-            --hidden-import tkinter.scrolledtext ^
-            --collect-submodules pandas ^
-            rename_pdfs_varsym.py
+          pyinstaller rename_pdfs_varsym_windows.spec
 
       - name: Verify executable
         run: |
