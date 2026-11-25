@@ -40,7 +40,8 @@ jobs:
           make -j4
           make install DESTDIR=/tmp/mdbtools-install
           "@
-          Set-Content -Path /tmp/build_mdbtools.sh -Value $script -NoNewline
+          $scriptPath = "C:\msys64\tmp\build_mdbtools.sh"
+          Set-Content -Path $scriptPath -Value $script -NoNewline
           C:/msys64/usr/bin/bash /tmp/build_mdbtools.sh
 
       - name: Copy mdbtools to project for bundling
