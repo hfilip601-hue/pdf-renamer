@@ -42,7 +42,7 @@ jobs:
           "
 
           # Download and build mdbtools from release tarball using MinGW64 environment
-          C:\msys64\usr\bin\bash -lc "
+          C:\msys64\mingw64\bin\bash -lc "
             cd /tmp
             curl -L -o mdbtools-1.0.1.tar.gz https://github.com/mdbtools/mdbtools/releases/download/v1.0.1/mdbtools-1.0.1.tar.gz
             tar xzf mdbtools-1.0.1.tar.gz
