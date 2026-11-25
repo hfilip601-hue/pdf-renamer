@@ -23,38 +23,56 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install mdbtools via Scoop
+      - name: Install mdbtools via winget
         run: |
-          # Scoop is pre-installed on windows-latest
-          scoop install mdbtools
+          # winget is pre-installed on windows-latest
+          winget install --id=BrianB.mdbtools --silent --accept-source-agreements --accept-package-agreements
+          # Or try the generic name
+          if ($LASTEXITCODE -ne 0) {
+            winget install mdbtools --silent --accept-source-agreements --accept-package-agreements
+          }
 
       - name: Copy mdbtools to project for bundling
         run: |
-          # Scoop installs to ~/scoop/apps/mdbtools/current/
-          $scoopPath = "$env:USERPROFILE\scoop\apps\mdbtools\current"
-          if (Test-Path $scoopPath) {
+          # winget installs to various locations, search common ones
+          $possiblePaths = @(
+            "C:\Program Files\mdbtools",
+            "C:\Program Files (x86)\mdbtools",
+            "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\BrianB.mdbtools_*\mdbtools",
+            "C:\winget\mdbtools"
+          )
+
+          $found = $false
+          foreach ($path in $possiblePaths) {
+            $expanded = Get-Item $path -ErrorAction SilentlyContinue
+            if ($expanded) {
+              $found = $true
+              $installPath = $expanded.FullName
+              break
+            }
+          }
+
+          if (-not $found) {
+            # Search for mdbtools executables anywhere
+            $exe = Get-Command mdb-export -ErrorAction SilentlyContinue
+            if ($exe) {
+              $installPath = Split-Path $exe.Source
+              $found = $true
+            }
+          }
+
+          if ($found) {
             New-Item -ItemType Directory -Force -Path "mdbtools\bin"
             New-Item -ItemType Directory -Force -Path "mdbtools\lib"
 
-            # Copy executables
-            Get-ChildItem "$scoopPath\*.exe" | ForEach-Object {
-              Copy-Item $_.FullName "mdbtools\bin\" -Force
-            }
+            Get-ChildItem "$installPath\*.exe" | ForEach-Object { Copy-Item $_.FullName "mdbtools\bin\" -Force }
+            Get-ChildItem "$installPath\*.dll" | ForEach-Object { Copy-Item $_.FullName "mdbtools\lib\" -Force }
+            Get-ChildItem "$installPath\*.dll" | ForEach-Object { Copy-Item $_.FullName "mdbtools\" -Force }
 
-            # Copy DLLs
-            Get-ChildItem "$scoopPath\*.dll" | ForEach-Object {
-              Copy-Item $_.FullName "mdbtools\lib\" -Force
-            }
-
-            # Also copy to root for fallback
-            Get-ChildItem "$scoopPath\*.dll" | ForEach-Object {
-              Copy-Item $_.FullName "mdbtools\" -Force
-            }
-
-            Write-Host "mdbtools copied successfully from Scoop"
+            Write-Host "mdbtools copied from $installPath"
             Get-ChildItem "mdbtools" -Recurse
           } else {
-            Write-Error "Scoop mdbtools not found at $scoopPath"
+            Write-Error "Could not locate mdbtools installation"
             exit 1
           }
 
