@@ -41,11 +41,12 @@ jobs:
               pkg-config
           "
 
-          # Clone and build mdbtools
+          # Download and build mdbtools from release tarball (includes pre-generated autotools files)
           C:\msys64\usr\bin\bash -lc "
             cd /tmp
-            git clone --depth 1 --branch v1.0.1 https://github.com/mdbtools/mdbtools.git
-            cd mdbtools
+            curl -L -o mdbtools-1.0.1.tar.gz https://github.com/mdbtools/mdbtools/releases/download/v1.0.1/mdbtools-1.0.1.tar.gz
+            tar xzf mdbtools-1.0.1.tar.gz
+            cd mdbtools-1.0.1
             ./autogen.sh
             ./configure --prefix=/mingw64 --disable-sql --disable-gmdb --disable-man
             make -j4
