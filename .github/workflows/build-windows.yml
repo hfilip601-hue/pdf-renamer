@@ -29,8 +29,8 @@ jobs:
 
       - name: Build mdbtools from source
         run: |
-          cat > /tmp/build_mdbtools.sh << 'EOF'
-          export PATH=/mingw64/bin:$PATH
+          $script = @"
+          export PATH=/mingw64/bin:\$PATH
           cd /tmp
           curl -L -o mdbtools-1.0.1.tar.gz https://github.com/mdbtools/mdbtools/releases/download/v1.0.1/mdbtools-1.0.1.tar.gz
           tar xzf mdbtools-1.0.1.tar.gz
@@ -39,7 +39,8 @@ jobs:
           ./configure --prefix=/mingw64 --disable-sql --disable-gmdb --disable-man
           make -j4
           make install DESTDIR=/tmp/mdbtools-install
-          EOF
+          "@
+          Set-Content -Path /tmp/build_mdbtools.sh -Value $script -NoNewline
           C:/msys64/usr/bin/bash /tmp/build_mdbtools.sh
 
       - name: Copy mdbtools to project for bundling
