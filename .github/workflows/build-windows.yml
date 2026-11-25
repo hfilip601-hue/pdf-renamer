@@ -23,39 +23,38 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install mdbtools via MSYS2
+      - name: Install mdbtools via Scoop
         run: |
-          # MSYS2 is pre-installed on windows-latest
-          # Use pacman to install mdbtools
-          C:\msys64\usr\bin\bash -lc "pacman -Sy --noconfirm mdbtools"
+          # Scoop is pre-installed on windows-latest
+          scoop install mdbtools
 
       - name: Copy mdbtools to project for bundling
         run: |
-          # MSYS2 installs to /usr/bin in MSYS2 paths
-          $msysBin = "C:\msys64\usr\bin"
-          if (Test-Path $msysBin) {
+          # Scoop installs to ~/scoop/apps/mdbtools/current/
+          $scoopPath = "$env:USERPROFILE\scoop\apps\mdbtools\current"
+          if (Test-Path $scoopPath) {
             New-Item -ItemType Directory -Force -Path "mdbtools\bin"
             New-Item -ItemType Directory -Force -Path "mdbtools\lib"
 
             # Copy executables
-            Get-ChildItem "$msysBin\mdb-*.exe" | ForEach-Object {
+            Get-ChildItem "$scoopPath\*.exe" | ForEach-Object {
               Copy-Item $_.FullName "mdbtools\bin\" -Force
             }
 
-            # Copy DLLs (mdbtools dependencies)
-            Get-ChildItem "$msysBin\*.dll" | Where-Object { $_.Name -match "lib(mdb|glib|intl|iconv|pcre|readline|termcap|winpthread)" } | ForEach-Object {
+            # Copy DLLs
+            Get-ChildItem "$scoopPath\*.dll" | ForEach-Object {
               Copy-Item $_.FullName "mdbtools\lib\" -Force
             }
 
             # Also copy to root for fallback
-            Get-ChildItem "$msysBin\*.dll" | Where-Object { $_.Name -match "lib(mdb|glib|intl|iconv|pcre|readline|termcap|winpthread)" } | ForEach-Object {
+            Get-ChildItem "$scoopPath\*.dll" | ForEach-Object {
               Copy-Item $_.FullName "mdbtools\" -Force
             }
 
-            Write-Host "mdbtools copied successfully from MSYS2"
+            Write-Host "mdbtools copied successfully from Scoop"
             Get-ChildItem "mdbtools" -Recurse
           } else {
-            Write-Error "MSYS2 not found at C:\msys64"
+            Write-Error "Scoop mdbtools not found at $scoopPath"
             exit 1
           }
 
