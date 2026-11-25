@@ -26,7 +26,7 @@ jobs:
       - name: Install Chocolatey
         uses: crazy-max/ghaction-chocolatey@v3
         with:
-          args: 'install mdbtools --version=1.0.0 -y'
+          args: 'install mdbtools -y'
 
       - name: Copy mdbtools to project for bundling
         run: |
