@@ -37,7 +37,8 @@ binaries = []
 datas = []
 
 if os.path.exists(MDBTOOLS_DIR):
-    # Add mdbtools executables from bin/
+    # Add mdbtools executables from bin/ to 'mdbtools' (root of bundle)
+    # This ensures executables and DLLs are co-located for dependency resolution
     bin_dir = os.path.join(MDBTOOLS_DIR, 'bin')
     if os.path.exists(bin_dir):
         for exe in ['mdb-export.exe', 'mdb-tables.exe', 'mdb-schema.exe']:
@@ -46,7 +47,7 @@ if os.path.exists(MDBTOOLS_DIR):
                 binaries.append((exe_path, 'mdbtools'))
                 print(f"  Adding executable: {exe}")
 
-    # Add mdbtools DLLs from lib/
+    # Add mdbtools DLLs from lib/ to 'mdbtools' (same dir as executables)
     lib_dir = os.path.join(MDBTOOLS_DIR, 'lib')
     if os.path.exists(lib_dir):
         for dll in os.listdir(lib_dir):
@@ -62,7 +63,8 @@ if os.path.exists(MDBTOOLS_DIR):
             binaries.append((dll_path, 'mdbtools'))
             print(f"  Adding DLL from root: {dll}")
 
-    # Also add as datas for runtime access via sys._MEIPASS
+    # Also add entire mdbtools tree as datas for fallback access via sys._MEIPASS
+    # This preserves the bin/ and lib/ structure
     datas.append((MDBTOOLS_DIR, 'mdbtools'))
     print(f"Bundling mdbtools from: {MDBTOOLS_DIR}")
 else:

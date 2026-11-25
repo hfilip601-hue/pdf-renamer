@@ -50,6 +50,40 @@ except ImportError:
     sys.exit(1)
 
 
+def get_bundled_mdbtools_dir() -> Optional[Path]:
+    """
+    Get the directory containing bundled mdbtools executables when running as PyInstaller bundle.
+    Returns None if not running as a bundle or if mdbtools not bundled.
+    Checks multiple possible locations since PyInstaller may place files differently
+    depending on whether they were added via 'binaries' or 'datas' in the spec.
+    """
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base = Path(sys._MEIPASS)
+        # Check both possible locations in order of likelihood:
+        # 1. mdbtools/ (from 'binaries' in spec - extracted from PYZ)
+        # 2. mdbtools/bin/ (from 'datas' in spec - copied as-is)
+        for subdir in ['mdbtools', 'mdbtools/bin']:
+            candidate = base / subdir
+            if candidate.exists() and any(candidate.glob('mdb-*.exe')):
+                return candidate
+    return None
+
+
+def find_mdbtools_executable(cmd: str) -> Optional[str]:
+    """
+    Find mdbtools executable, checking bundled directory first, then system PATH.
+    """
+    # Check bundled directory first
+    bundled_dir = get_bundled_mdbtools_dir()
+    if bundled_dir:
+        bundled_exe = bundled_dir / f"{cmd}.exe"
+        if bundled_exe.exists():
+            return str(bundled_exe)
+
+    # Fall back to system PATH (allows running without bundle if mdbtools installed)
+    return shutil.which(cmd)
+
+
 # ============================================================
 # Column aliases for POHODA MDB export
 # ============================================================
@@ -364,14 +398,32 @@ def extract_all_variable_symbol_candidates(text: str) -> List[Tuple[int, str, st
     return candidates
 
 
-def find_fa_table(mdb_path: Path) -> Optional[str]:
+def load_varsym_to_cislo_map(mdb_path: Path) -> Tuple[Dict[str, str], str]:
     """
-    Find the FA (Faktury/Invoices) table in the MDB.
-    POHODA typically names invoice tables starting with 'FA'.
+    Load the mapping from varsym -> cislo from the FA table.
+    Returns (varsym_to_cislo_dict, table_name_used)
     """
+    if not mdb_path.exists():
+        raise FileNotFoundError(f"MDB file not found: {mdb_path}")
+
+    # Find mdbtools executables (bundled or system)
+    mdb_tables_exe = find_mdbtools_executable('mdb-tables')
+    mdb_export_exe = find_mdbtools_executable('mdb-export')
+    mdb_schema_exe = find_mdbtools_executable('mdb-schema')
+
+    if not mdb_tables_exe or not mdb_export_exe:
+        raise ValueError(
+            f"Required mdbtools commands not found. Please install mdbtools:\n"
+            f"  Arch: sudo pacman -S mdbtools\n"
+            f"  Debian/Ubuntu: sudo apt install mdbtools\n"
+            f"  Fedora: sudo dnf install mdbtools\n"
+            f"  macOS: brew install mdbtools"
+        )
+
+    # Find FA table
     try:
         result = subprocess.run(
-            ['mdb-tables', '-1', str(mdb_path)],
+            [mdb_tables_exe, '-1', str(mdb_path)],
             capture_output=True,
             text=True,
             check=True
@@ -381,38 +433,16 @@ def find_fa_table(mdb_path: Path) -> Optional[str]:
         raise ValueError(f"Failed to list tables in MDB file: {e.stderr}")
 
     # Look for tables starting with FA (case insensitive)
+    table_name = None
     for table in tables:
         if table.upper().startswith('FA'):
-            return table
+            table_name = table
+            break
 
     # Fallback: first table
-    if tables:
-        return tables[0]
+    if not table_name and tables:
+        table_name = tables[0]
 
-    return None
-
-
-def load_varsym_to_cislo_map(mdb_path: Path) -> Tuple[Dict[str, str], str]:
-    """
-    Load the mapping from varsym -> cislo from the FA table.
-    Returns (varsym_to_cislo_dict, table_name_used)
-    """
-    if not mdb_path.exists():
-        raise FileNotFoundError(f"MDB file not found: {mdb_path}")
-
-    # Check if mdb-tools is available
-    for cmd in ['mdb-tables', 'mdb-export']:
-        if not shutil.which(cmd):
-            raise ValueError(
-                f"Required command '{cmd}' not found. Please install mdbtools:\n"
-                f"  Arch: sudo pacman -S mdbtools\n"
-                f"  Debian/Ubuntu: sudo apt install mdbtools\n"
-                f"  Fedora: sudo dnf install mdbtools\n"
-                f"  macOS: brew install mdbtools"
-            )
-
-    # Find FA table
-    table_name = find_fa_table(mdb_path)
     if not table_name:
         raise ValueError("No tables found in MDB file.")
 
@@ -421,7 +451,7 @@ def load_varsym_to_cislo_map(mdb_path: Path) -> Tuple[Dict[str, str], str]:
     # Export table to CSV using mdb-export
     try:
         result = subprocess.run(
-            ['mdb-export', str(mdb_path), table_name],
+            [mdb_export_exe, str(mdb_path), table_name],
             capture_output=True,
             text=True,
             check=True
@@ -1327,8 +1357,11 @@ def run_gui():
 
 
 if __name__ == '__main__':
-    # Check for --gui argument before parsing other args
-    if '--gui' in sys.argv:
+    # Check for --gui argument or no arguments (default to GUI)
+    # If any other CLI args are provided, run in CLI mode
+    cli_args = [arg for arg in sys.argv[1:] if not arg.startswith('--gui')]
+
+    if '--gui' in sys.argv or len(cli_args) == 0:
         run_gui()
     else:
         sys.exit(main())
