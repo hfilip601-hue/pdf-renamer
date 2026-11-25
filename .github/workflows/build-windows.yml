@@ -44,7 +44,7 @@ jobs:
           # Clone and build mdbtools
           C:\msys64\usr\bin\bash -lc "
             cd /tmp
-            git clone --depth 1 --branch 1.0.1 https://github.com/mdbtools/mdbtools.git
+            git clone --depth 1 --branch v1.0.1 https://github.com/mdbtools/mdbtools.git
             cd mdbtools
             ./autogen.sh
             ./configure --prefix=/mingw64 --disable-sql --disable-gmdb --disable-man
