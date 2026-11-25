@@ -12,7 +12,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -26,9 +26,9 @@ jobs:
       - name: Build mdbtools from source using MSYS2/MinGW
         run: |
           # MSYS2 with MinGW64 is pre-installed on windows-latest
-          # Install build dependencies and mdbtools
+          # Install build dependencies (non-interactive)
           C:\msys64\usr\bin\bash -lc "
-            pacman -Sy --noconfirm \
+            pacman -Sy --noconfirm --needed \
               base-devel \
               mingw-w64-x86_64-toolchain \
               mingw-w64-x86_64-glib2 \
@@ -38,8 +38,7 @@ jobs:
               autoconf \
               automake \
               libtool \
-              pkg-config \
-              txt2man
+              pkg-config
           "
 
           # Clone and build mdbtools
