@@ -23,54 +23,40 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Download mdbtools Windows binaries
+      - name: Install mdbtools via MSYS2
         run: |
-          # Create mdbtools directory structure
-          New-Item -ItemType Directory -Force -Path "mdbtools\bin"
-          New-Item -ItemType Directory -Force -Path "mdbtools\lib"
+          # MSYS2 is pre-installed on windows-latest
+          # Use pacman to install mdbtools
+          C:\msys64\usr\bin\bash -lc "pacman -Sy --noconfirm mdbtools"
 
-          # Download mdbtools from official source
-          # Using a known working build from GitHub or alternative
-          $mdbtoolsUrl = "https://github.com/brianb/mdbtools/releases/download/1.0.0/mdbtools-1.0.0-win64.zip"
-          $zipPath = "mdbtools.zip"
-
-          try {
-            Invoke-WebRequest -Uri $mdbtoolsUrl -OutFile $zipPath -UseBasicParsing
-            Expand-Archive -Path $zipPath -DestinationPath "mdbtools_temp" -Force
+      - name: Copy mdbtools to project for bundling
+        run: |
+          # MSYS2 installs to /usr/bin in MSYS2 paths
+          $msysBin = "C:\msys64\usr\bin"
+          if (Test-Path $msysBin) {
+            New-Item -ItemType Directory -Force -Path "mdbtools\bin"
+            New-Item -ItemType Directory -Force -Path "mdbtools\lib"
 
             # Copy executables
-            Get-ChildItem "mdbtools_temp\bin\*.exe" | ForEach-Object {
+            Get-ChildItem "$msysBin\mdb-*.exe" | ForEach-Object {
               Copy-Item $_.FullName "mdbtools\bin\" -Force
             }
 
-            # Copy DLLs
-            Get-ChildItem "mdbtools_temp\bin\*.dll" | ForEach-Object {
-              Copy-Item $_.FullName "mdbtools\lib\" -Force
-            }
-            Get-ChildItem "mdbtools_temp\lib\*.dll" | ForEach-Object {
+            # Copy DLLs (mdbtools dependencies)
+            Get-ChildItem "$msysBin\*.dll" | Where-Object { $_.Name -match "lib(mdb|glib|intl|iconv|pcre|readline|termcap|winpthread)" } | ForEach-Object {
               Copy-Item $_.FullName "mdbtools\lib\" -Force
             }
 
-            Remove-Item -Recurse -Force "mdbtools_temp"
-            Remove-Item -Force $zipPath
-            Write-Host "mdbtools downloaded and extracted successfully"
-            Get-ChildItem "mdbtools" -Recurse
-          } catch {
-            Write-Warning "Failed to download from primary source, trying alternative..."
-            # Alternative: use MSYS2 or pre-built binaries
-            $altUrl = "https://github.com/mdbtools/mdbtools/releases/download/1.0.0/mdbtools-1.0.0-win64.zip"
-            try {
-              Invoke-WebRequest -Uri $altUrl -OutFile $zipPath -UseBasicParsing
-              Expand-Archive -Path $zipPath -DestinationPath "mdbtools_temp" -Force
-              Get-ChildItem "mdbtools_temp\**\*.exe" | ForEach-Object { Copy-Item $_.FullName "mdbtools\bin\" -Force }
-              Get-ChildItem "mdbtools_temp\**\*.dll" | ForEach-Object { Copy-Item $_.FullName "mdbtools\lib\" -Force }
-              Remove-Item -Recurse -Force "mdbtools_temp"
-              Remove-Item -Force $zipPath
-              Write-Host "mdbtools downloaded from alternative source"
-            } catch {
-              Write-Error "All download sources failed"
-              exit 1
+            # Also copy to root for fallback
+            Get-ChildItem "$msysBin\*.dll" | Where-Object { $_.Name -match "lib(mdb|glib|intl|iconv|pcre|readline|termcap|winpthread)" } | ForEach-Object {
+              Copy-Item $_.FullName "mdbtools\" -Force
             }
+
+            Write-Host "mdbtools copied successfully from MSYS2"
+            Get-ChildItem "mdbtools" -Recurse
+          } else {
+            Write-Error "MSYS2 not found at C:\msys64"
+            exit 1
           }
 
       - name: Install Python dependencies
