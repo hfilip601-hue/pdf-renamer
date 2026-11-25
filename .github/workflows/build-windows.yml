@@ -30,7 +30,7 @@ jobs:
       - name: Build mdbtools from source
         run: |
           $script = @"
-          export PATH=/mingw64/bin:\$PATH
+          export PATH=/mingw64/bin:`$PATH
           cd /tmp
           curl -L -o mdbtools-1.0.1.tar.gz https://github.com/mdbtools/mdbtools/releases/download/v1.0.1/mdbtools-1.0.1.tar.gz
           tar xzf mdbtools-1.0.1.tar.gz
