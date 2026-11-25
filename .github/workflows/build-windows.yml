@@ -23,13 +23,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install MSYS2 build dependencies
+      - name: Install MSYS2 build dependencies and build mdbtools
         run: |
-          C:/msys64/usr/bin/bash -lc "pacman -Sy --noconfirm --needed base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-glib2 mingw-w64-x86_64-libiconv mingw-w64-x86_64-readline git autoconf automake libtool pkg-config"
+          C:/msys64/usr/bin/bash -lc "
+            pacman -Sy --noconfirm --needed base-devel mingw-w64-x86_64-toolchain mingw-w64-x86_64-glib2 mingw-w64-x86_64-libiconv mingw-w64-x86_64-readline git autoconf automake libtool pkg-config
 
-      - name: Build mdbtools from source using MinGW64
-        run: |
-          C:/msys64/mingw64/bin/bash -lc "
+            # Build mdbtools using MinGW64 toolchain (add to PATH)
+            export PATH=/mingw64/bin:\$PATH
             cd /tmp
             curl -L -o mdbtools-1.0.1.tar.gz https://github.com/mdbtools/mdbtools/releases/download/v1.0.1/mdbtools-1.0.1.tar.gz
             tar xzf mdbtools-1.0.1.tar.gz
