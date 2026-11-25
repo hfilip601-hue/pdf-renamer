@@ -23,56 +23,62 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install mdbtools via winget
+      - name: Build mdbtools from source using MSYS2/MinGW
         run: |
-          # winget is pre-installed on windows-latest
-          winget install --id=BrianB.mdbtools --silent --accept-source-agreements --accept-package-agreements
-          # Or try the generic name
-          if ($LASTEXITCODE -ne 0) {
-            winget install mdbtools --silent --accept-source-agreements --accept-package-agreements
-          }
+          # MSYS2 with MinGW64 is pre-installed on windows-latest
+          # Install build dependencies and mdbtools
+          C:\msys64\usr\bin\bash -lc "
+            pacman -Sy --noconfirm \
+              base-devel \
+              mingw-w64-x86_64-toolchain \
+              mingw-w64-x86_64-glib2 \
+              mingw-w64-x86_64-libiconv \
+              mingw-w64-x86_64-readline \
+              git \
+              autoconf \
+              automake \
+              libtool \
+              pkg-config \
+              txt2man
+          "
+
+          # Clone and build mdbtools
+          C:\msys64\usr\bin\bash -lc "
+            cd /tmp
+            git clone --depth 1 --branch 1.0.1 https://github.com/mdbtools/mdbtools.git
+            cd mdbtools
+            ./autogen.sh
+            ./configure --prefix=/mingw64 --disable-sql --disable-gmdb --disable-man
+            make -j4
+            make install DESTDIR=/tmp/mdbtools-install
+          "
 
       - name: Copy mdbtools to project for bundling
         run: |
-          # winget installs to various locations, search common ones
-          $possiblePaths = @(
-            "C:\Program Files\mdbtools",
-            "C:\Program Files (x86)\mdbtools",
-            "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\BrianB.mdbtools_*\mdbtools",
-            "C:\winget\mdbtools"
-          )
-
-          $found = $false
-          foreach ($path in $possiblePaths) {
-            $expanded = Get-Item $path -ErrorAction SilentlyContinue
-            if ($expanded) {
-              $found = $true
-              $installPath = $expanded.FullName
-              break
-            }
-          }
-
-          if (-not $found) {
-            # Search for mdbtools executables anywhere
-            $exe = Get-Command mdb-export -ErrorAction SilentlyContinue
-            if ($exe) {
-              $installPath = Split-Path $exe.Source
-              $found = $true
-            }
-          }
-
-          if ($found) {
+          $installPath = "C:\msys64\tmp\mdbtools-install\mingw64"
+          if (Test-Path $installPath) {
             New-Item -ItemType Directory -Force -Path "mdbtools\bin"
             New-Item -ItemType Directory -Force -Path "mdbtools\lib"
 
-            Get-ChildItem "$installPath\*.exe" | ForEach-Object { Copy-Item $_.FullName "mdbtools\bin\" -Force }
-            Get-ChildItem "$installPath\*.dll" | ForEach-Object { Copy-Item $_.FullName "mdbtools\lib\" -Force }
-            Get-ChildItem "$installPath\*.dll" | ForEach-Object { Copy-Item $_.FullName "mdbtools\" -Force }
+            # Copy executables
+            Get-ChildItem "$installPath\bin\mdb-*.exe" | ForEach-Object {
+              Copy-Item $_.FullName "mdbtools\bin\" -Force
+            }
 
-            Write-Host "mdbtools copied from $installPath"
+            # Copy DLLs
+            Get-ChildItem "$installPath\bin\*.dll" | ForEach-Object {
+              Copy-Item $_.FullName "mdbtools\lib\" -Force
+            }
+
+            # Also copy to root for fallback
+            Get-ChildItem "$installPath\bin\*.dll" | ForEach-Object {
+              Copy-Item $_.FullName "mdbtools\" -Force
+            }
+
+            Write-Host "mdbtools built and copied successfully"
             Get-ChildItem "mdbtools" -Recurse
           } else {
-            Write-Error "Could not locate mdbtools installation"
+            Write-Error "mdbtools build output not found at $installPath"
             exit 1
           }
 
