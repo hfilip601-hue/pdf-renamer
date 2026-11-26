@@ -10,13 +10,15 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-mdbtools:
+    name: Build mdbtools
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     defaults:
       run:
         shell: msys2 {0}
-
+    outputs:
+      mdbtools-path: ${{ steps.copy.outputs.mdbtools-path }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -36,8 +38,6 @@ jobs:
             automake
             libtool
             pkg-config
-            python
-            python-pip
           update: true
           cache: false
 
@@ -68,6 +68,7 @@ jobs:
           make install DESTDIR=/tmp/mdbtools-install
 
       - name: Copy mdbtools to project for bundling
+        id: copy
         run: |
           # Find where mdbtools was installed (libraries)
           echo "=== Searching for mdbtools install ==="
@@ -98,16 +99,51 @@ jobs:
           if [ -f "mdbtools/bin/mdb-export.exe" ] && [ -f "mdbtools/bin/mdb-tables.exe" ] && [ -f "mdbtools/bin/mdb-schema.exe" ]; then
             echo "mdbtools ready for bundling"
             find mdbtools -type f | sort
+            echo "mdbtools-path=${{ github.workspace }}/mdbtools" >> $GITHUB_OUTPUT
           else
             echo "ERROR: mdbtools executables not found"
             find /tmp/mdbtools-1.0.1 -name "mdb-*" -type f 2>/dev/null
             exit 1
           fi
 
+      - name: Upload mdbtools artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mdbtools-windows
+          path: mdbtools/
+          retention-days: 1
+
+  build-exe:
+    name: Build EXE
+    runs-on: windows-latest
+    timeout-minutes: 30
+    needs: build-mdbtools
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download mdbtools artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: mdbtools-windows
+          path: mdbtools
+
+      - name: Verify mdbtools downloaded
+        run: |
+          dir mdbtools
+          dir mdbtools\bin
+          dir mdbtools\lib
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+
       - name: Install Python dependencies
         run: |
-          pip install --upgrade pip --break-system-packages
-          pip install pandas pypdf pyinstaller --break-system-packages
+          pip install --upgrade pip
+          pip install pandas pypdf pyinstaller
 
       - name: Build executable with PyInstaller (using spec file)
         run: |
@@ -115,7 +151,7 @@ jobs:
 
       - name: Verify executable
         run: |
-          dist/rename_pdfs_varsym.exe --help
+          dist\rename_pdfs_varsym.exe --help
 
       - name: Upload Windows EXE as artifact
         uses: actions/upload-artifact@v4
