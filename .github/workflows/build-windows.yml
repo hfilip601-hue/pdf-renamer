@@ -54,15 +54,14 @@ jobs:
           # Patch mdbtools.h: fix locale_t typedef
           sed -i 's/typedef locale_t mdb_locale_t;/typedef _locale_t mdb_locale_t;/' include/mdbtools.h
           # Rename spawnv to mdb_spawnv everywhere to avoid conflict with system header
-          # The system header declares: intptr_t spawnv(int, const char *, char * const*)
-          # mdbtools declares: intptr_t spawnv(int, const char *, const char * const*)
-          # Rename function and all references
           find . -name "*.h" -o -name "*.c" | xargs sed -i 's/\bspawnv\b/mdb_spawnv/g'
+          # Remove -D_spawnv=spawnv from generated Makefiles (added by configure/libtool)
+          find . -name "Makefile" | xargs sed -i 's/-D_spawnv=spawnv//g'
           # Verify patches
           echo "=== Checking for spawnv references ==="
           grep -r "spawnv" include/ src/ 2>/dev/null || echo "No spawnv references found"
           echo "=== Checking for mdb_spawnv references ==="
-          grep -r "mdb_spawnv" include/ src/ 2>/dev/null | head -20
+          grep -r "mdb_spawnv" include/ src/ 2>/dev/null | head -20 || true
           make -j4
           make install DESTDIR=/tmp/mdbtools-install
 
