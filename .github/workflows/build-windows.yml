@@ -87,13 +87,24 @@ jobs:
           cp /tmp/mdbtools-1.0.1/src/util/.libs/mdb-tables.exe mdbtools/bin/ 2>/dev/null || cp /tmp/mdbtools-1.0.1/src/util/mdb-tables.exe mdbtools/bin/
           cp /tmp/mdbtools-1.0.1/src/util/.libs/mdb-schema.exe mdbtools/bin/ 2>/dev/null || cp /tmp/mdbtools-1.0.1/src/util/mdb-schema.exe mdbtools/bin/
 
-          # Copy DLLs from install directory
-          cp /tmp/mdbtools-install/ucrt64/bin/*.dll mdbtools/lib/ 2>/dev/null || true
-          cp /tmp/mdbtools-install/ucrt64/bin/*.dll mdbtools/ 2>/dev/null || true
-          # Also copy any DLLs from build directory
-          cp /tmp/mdbtools-1.0.1/src/util/.libs/*.dll mdbtools/lib/ 2>/dev/null || true
-          cp /tmp/mdbtools-1.0.1/src/libmdb/.libs/*.dll mdbtools/lib/ 2>/dev/null || true
-          cp /tmp/mdbtools-1.0.1/src/libmdbsql/.libs/*.dll mdbtools/lib/ 2>/dev/null || true
+          # Copy ALL DLLs to bin/ directory (same folder as executables) so they're found at runtime
+          # Windows DLL search order: executable's directory first
+          cp /tmp/mdbtools-install/ucrt64/bin/*.dll mdbtools/bin/ 2>/dev/null || true
+          cp /tmp/mdbtools-1.0.1/src/util/.libs/*.dll mdbtools/bin/ 2>/dev/null || true
+          cp /tmp/mdbtools-1.0.1/src/libmdb/.libs/*.dll mdbtools/bin/ 2>/dev/null || true
+          cp /tmp/mdbtools-1.0.1/src/libmdbsql/.libs/*.dll mdbtools/bin/ 2>/dev/null || true
+          # Also copy glib, iconv, readline, intl DLLs from MSYS2
+          cp /ucrt64/bin/libglib-2.0-0.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libgobject-2.0-0.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libgmodule-2.0-0.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libgio-2.0-0.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libintl.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libiconv.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libreadline*.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libncursesw*.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libpcre*.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libffi*.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/zlib1.dll mdbtools/bin/ 2>/dev/null || true
 
           # Verify we have what we need
           if [ -f "mdbtools/bin/mdb-export.exe" ] && [ -f "mdbtools/bin/mdb-tables.exe" ] && [ -f "mdbtools/bin/mdb-schema.exe" ]; then
