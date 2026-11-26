@@ -34,7 +34,7 @@ jobs:
             git
             python
             python-pip
-            7zip
+            p7zip
           update: true
           cache: false
 
