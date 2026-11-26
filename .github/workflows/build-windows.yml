@@ -62,6 +62,13 @@ jobs:
           sed -i '/spawnv/d' include/mdbtools.h
           # Also patch any .c files that might declare spawnv
           find src -name "*.c" -exec sed -i '/spawnv/d' {} \;
+          # Also patch config.h if it has spawnv
+          sed -i '/spawnv/d' config.h 2>/dev/null || true
+          # Verify patches
+          echo "=== mdbtools.h after patch ==="
+          grep -n "spawnv\|locale_t" include/mdbtools.h || echo "No spawnv/locale_t found"
+          echo "=== config.h after patch ==="
+          grep -n "spawnv\|locale_t" config.h 2>/dev/null || echo "No spawnv/locale_t found"
           make -j4
           make install DESTDIR=/tmp/mdbtools-install
 
