@@ -37,36 +37,21 @@ binaries = []
 datas = []
 
 if os.path.exists(MDBTOOLS_DIR):
-    # Add mdbtools executables from bin/ to 'mdbtools' (root of bundle)
-    # This ensures executables and DLLs are co-located for dependency resolution
-    bin_dir = os.path.join(MDBTOOLS_DIR, 'bin')
-    if os.path.exists(bin_dir):
-        for exe in ['mdb-export.exe', 'mdb-tables.exe', 'mdb-schema.exe']:
-            exe_path = os.path.join(bin_dir, exe)
-            if os.path.exists(exe_path):
-                binaries.append((exe_path, 'mdbtools'))
-                print(f"  Adding executable: {exe}")
-
-    # Add mdbtools DLLs from lib/ to 'mdbtools' (same dir as executables)
-    lib_dir = os.path.join(MDBTOOLS_DIR, 'lib')
-    if os.path.exists(lib_dir):
-        for dll in os.listdir(lib_dir):
-            if dll.endswith('.dll'):
-                dll_path = os.path.join(lib_dir, dll)
-                binaries.append((dll_path, 'mdbtools'))
-                print(f"  Adding DLL from lib/: {dll}")
-
-    # Add mdbtools DLLs from root (some installations put them here)
-    for dll in os.listdir(MDBTOOLS_DIR):
-        if dll.endswith('.dll'):
-            dll_path = os.path.join(MDBTOOLS_DIR, dll)
-            binaries.append((dll_path, 'mdbtools'))
-            print(f"  Adding DLL from root: {dll}")
-
-    # Also add entire mdbtools tree as datas for fallback access via sys._MEIPASS
-    # This preserves the bin/ and lib/ structure
+    # Add entire mdbtools tree as datas - this preserves directory structure
+    # and ensures executables and DLLs are co-located in _MEIPASS/mdbtools/
+    # bin/ contains mdb-export.exe, mdb-tables.exe, mdb-schema.exe + DLLs
+    # lib/ contains additional DLLs
     datas.append((MDBTOOLS_DIR, 'mdbtools'))
     print(f"Bundling mdbtools from: {MDBTOOLS_DIR}")
+
+    # Print what we're bundling for verification
+    for root, dirs, files in os.walk(MDBTOOLS_DIR):
+        for f in files:
+            rel_root = os.path.relpath(root, MDBTOOLS_DIR)
+            if rel_root == '.':
+                print(f"  mdbtools/{f}")
+            else:
+                print(f"  mdbtools/{rel_root}/{f}")
 else:
     print(f"WARNING: mdbtools directory not found at {MDBTOOLS_DIR}")
     print("The executable will require mdbtools to be installed on the target system.")

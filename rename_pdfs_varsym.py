@@ -59,10 +59,11 @@ def get_bundled_mdbtools_dir() -> Optional[Path]:
     """
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
         base = Path(sys._MEIPASS)
-        # Check both possible locations in order of likelihood:
-        # 1. mdbtools/ (from 'binaries' in spec - extracted from PYZ)
-        # 2. mdbtools/bin/ (from 'datas' in spec - copied as-is)
-        for subdir in ['mdbtools', 'mdbtools/bin']:
+        # Check possible locations in order of likelihood:
+        # 1. mdbtools/bin/ (from 'datas' in spec - preserves directory structure)
+        # 2. mdbtools/ (from 'binaries' in spec - extracted from PYZ)
+        # 3. mdbtools/lib/ (DLLs may be here, executables in bin/)
+        for subdir in ['mdbtools/bin', 'mdbtools', 'mdbtools/lib']:
             candidate = base / subdir
             if candidate.exists() and any(candidate.glob('mdb-*.exe')):
                 return candidate
@@ -79,6 +80,15 @@ def find_mdbtools_executable(cmd: str) -> Optional[str]:
         bundled_exe = bundled_dir / f"{cmd}.exe"
         if bundled_exe.exists():
             return str(bundled_exe)
+
+    # Also check _MEIPASS root directly for mdbtools (some PyInstaller versions)
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base = Path(sys._MEIPASS)
+        for subdir in ['mdbtools/bin', 'mdbtools', 'mdbtools/lib', '.']:
+            candidate = base / subdir
+            bundled_exe = candidate / f"{cmd}.exe"
+            if bundled_exe.exists():
+                return str(bundled_exe)
 
     # Fall back to system PATH (allows running without bundle if mdbtools installed)
     return shutil.which(cmd)
