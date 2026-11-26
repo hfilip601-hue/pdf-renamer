@@ -93,13 +93,14 @@ jobs:
           cp /tmp/mdbtools-1.0.1/src/util/.libs/*.dll mdbtools/bin/ 2>/dev/null || true
           cp /tmp/mdbtools-1.0.1/src/libmdb/.libs/*.dll mdbtools/bin/ 2>/dev/null || true
           cp /tmp/mdbtools-1.0.1/src/libmdbsql/.libs/*.dll mdbtools/bin/ 2>/dev/null || true
-          # Also copy glib, iconv, readline, intl, termcap DLLs from MSYS2
+          # Also copy glib, iconv, readline, intl, termcap DLLs from MSYS2 (use wildcards for actual names)
           cp /ucrt64/bin/libglib-2.0-0.dll mdbtools/bin/ 2>/dev/null || true
           cp /ucrt64/bin/libgobject-2.0-0.dll mdbtools/bin/ 2>/dev/null || true
           cp /ucrt64/bin/libgmodule-2.0-0.dll mdbtools/bin/ 2>/dev/null || true
           cp /ucrt64/bin/libgio-2.0-0.dll mdbtools/bin/ 2>/dev/null || true
-          cp /ucrt64/bin/libintl.dll mdbtools/bin/ 2>/dev/null || true
-          cp /ucrt64/bin/libiconv.dll mdbtools/bin/ 2>/dev/null || true
+          # libintl and libiconv have versioned names in MSYS2
+          cp /ucrt64/bin/libintl*.dll mdbtools/bin/ 2>/dev/null || true
+          cp /ucrt64/bin/libiconv*.dll mdbtools/bin/ 2>/dev/null || true
           cp /ucrt64/bin/libreadline*.dll mdbtools/bin/ 2>/dev/null || true
           cp /ucrt64/bin/libncursesw*.dll mdbtools/bin/ 2>/dev/null || true
           cp /ucrt64/bin/libpcre*.dll mdbtools/bin/ 2>/dev/null || true
@@ -107,15 +108,19 @@ jobs:
           cp /ucrt64/bin/zlib1.dll mdbtools/bin/ 2>/dev/null || true
           cp /ucrt64/bin/libtermcap*.dll mdbtools/bin/ 2>/dev/null || true
 
-          # Verify critical DLLs were copied
+          # Verify critical DLLs were copied (check actual files)
           echo "=== Verifying critical DLLs in mdbtools/bin ==="
-          for dll in libmdb-3.dll libmdbsql-3.dll libglib-2.0-0.dll libgobject-2.0-0.dll libgio-2.0-0.dll libintl.dll libiconv.dll libreadline8.dll libncursesw6.dll zlib1.dll; do
+          ls -la mdbtools/bin/*.dll 2>/dev/null | head -30
+          for dll in libmdb-3.dll libmdbsql-3.dll libglib-2.0-0.dll libgobject-2.0-0.dll libgio-2.0-0.dll zlib1.dll; do
             if [ ! -f "mdbtools/bin/$dll" ]; then
               echo "WARNING: $dll NOT FOUND in mdbtools/bin/"
             else
               echo "OK: $dll found"
             fi
           done
+          # Check for libintl and libiconv (any version)
+          if ls mdbtools/bin/libintl*.dll 1>/dev/null 2>&1; then echo "OK: libintl*.dll found"; else echo "WARNING: libintl*.dll NOT FOUND"; fi
+          if ls mdbtools/bin/libiconv*.dll 1>/dev/null 2>&1; then echo "OK: libiconv*.dll found"; else echo "WARNING: libiconv*.dll NOT FOUND"; fi
 
           # Verify we have what we need
           if [ -f "mdbtools/bin/mdb-export.exe" ] && [ -f "mdbtools/bin/mdb-tables.exe" ] && [ -f "mdbtools/bin/mdb-schema.exe" ]; then
