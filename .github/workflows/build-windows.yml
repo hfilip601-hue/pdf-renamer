@@ -57,8 +57,11 @@ jobs:
           ./configure --prefix=/ucrt64 --disable-sql --disable-gmdb --disable-man
           # Patch mdbtools.h to fix spawnv conflict and locale_t typedef
           sed -i 's/typedef locale_t mdb_locale_t;/typedef _locale_t mdb_locale_t;/' include/mdbtools.h
-          # Remove or rename spawnv declaration in mdbtools.h to avoid conflict with system header
-          sed -i '/int.*spawnv.*/d' include/mdbtools.h
+          # Remove spawnv declaration from mdbtools.h (conflicts with system header)
+          # The declaration looks like: intptr_t spawnv(int, const char *, const char * const*);
+          sed -i '/spawnv/d' include/mdbtools.h
+          # Also patch any .c files that might declare spawnv
+          find src -name "*.c" -exec sed -i '/spawnv/d' {} \;
           make -j4
           make install DESTDIR=/tmp/mdbtools-install
 
