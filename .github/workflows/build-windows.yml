@@ -38,43 +38,14 @@ jobs:
             pkg-config
             python
             python-pip
+            mingw-w64-ucrt-x86_64-mdbtools
           update: true
           cache: false
 
-      - name: Build mdbtools from source
-        run: |
-          cd /tmp
-          curl -L -o mdbtools-1.0.1.tar.gz https://github.com/mdbtools/mdbtools/releases/download/v1.0.1/mdbtools-1.0.1.tar.gz
-          tar xzf mdbtools-1.0.1.tar.gz
-          cd mdbtools-1.0.1
-          autoreconf -fiv
-          # Add CFLAGS to fix compilation issues with newer MinGW/UCRT64:
-          # - _GNU_SOURCE and _POSIX_C_SOURCE for locale_t and POSIX functions
-          # - __USE_MINGW_ANSI_STDIO for printf format warnings
-          # - Wno-error=implicit-function-declaration for implicit function warnings
-          # - Dlocale_t=_locale_t to fix unknown type name locale_t (UCRT uses _locale_t)
-          export CFLAGS="-D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D__USE_MINGW_ANSI_STDIO=1 -Wno-error=implicit-function-declaration -Dlocale_t=_locale_t"
-          ./configure --prefix=/ucrt64 --disable-sql --disable-gmdb --disable-man
-          # Patch mdbtools.h to fix spawnv conflict and locale_t typedef
-          sed -i 's/typedef locale_t mdb_locale_t;/typedef _locale_t mdb_locale_t;/' include/mdbtools.h
-          # Remove spawnv declaration from mdbtools.h (conflicts with system header)
-          # The declaration looks like: intptr_t spawnv(int, const char *, const char * const*);
-          sed -i '/spawnv/d' include/mdbtools.h
-          # Also patch any .c files that might declare spawnv
-          find src -name "*.c" -exec sed -i '/spawnv/d' {} \;
-          # Also patch config.h if it has spawnv
-          sed -i '/spawnv/d' config.h 2>/dev/null || true
-          # Verify patches
-          echo "=== mdbtools.h after patch ==="
-          grep -n "spawnv\|locale_t" include/mdbtools.h || echo "No spawnv/locale_t found"
-          echo "=== config.h after patch ==="
-          grep -n "spawnv\|locale_t" config.h 2>/dev/null || echo "No spawnv/locale_t found"
-          make -j4
-          make install DESTDIR=/tmp/mdbtools-install
-
       - name: Copy mdbtools to project for bundling
         run: |
-          installPath="/tmp/mdbtools-install/ucrt64"
+          # Use MSYS2 installed mdbtools (pre-built, compatible with UCRT64)
+          installPath="/ucrt64"
           if [ -d "$installPath" ]; then
             mkdir -p mdbtools/bin
             mkdir -p mdbtools/lib
@@ -84,10 +55,10 @@ jobs:
             cp "$installPath"/bin/*.dll mdbtools/lib/
             # Also copy to root for fallback
             cp "$installPath"/bin/*.dll mdbtools/
-            echo "mdbtools built and copied successfully"
+            echo "mdbtools copied successfully from MSYS2 package"
             find mdbtools -type f | sort
           else
-            echo "ERROR: mdbtools build output not found at $installPath"
+            echo "ERROR: mdbtools not found at $installPath"
             exit 1
           fi
 
