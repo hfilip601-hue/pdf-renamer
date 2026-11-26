@@ -53,9 +53,12 @@ jobs:
           # - __USE_MINGW_ANSI_STDIO for printf format warnings
           # - Wno-error=implicit-function-declaration for implicit function warnings
           # - Dlocale_t=_locale_t to fix unknown type name locale_t (UCRT uses _locale_t)
-          # - Uspawnv to undefine conflicting spawnv declaration
-          export CFLAGS="-D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D__USE_MINGW_ANSI_STDIO=1 -Wno-error=implicit-function-declaration -Dlocale_t=_locale_t -Uspawnv"
+          export CFLAGS="-D_GNU_SOURCE -D_POSIX_C_SOURCE=200809L -D__USE_MINGW_ANSI_STDIO=1 -Wno-error=implicit-function-declaration -Dlocale_t=_locale_t"
           ./configure --prefix=/ucrt64 --disable-sql --disable-gmdb --disable-man
+          # Patch mdbtools.h to fix spawnv conflict and locale_t typedef
+          sed -i 's/typedef locale_t mdb_locale_t;/typedef _locale_t mdb_locale_t;/' include/mdbtools.h
+          # Remove or rename spawnv declaration in mdbtools.h to avoid conflict with system header
+          sed -i '/int.*spawnv.*/d' include/mdbtools.h
           make -j4
           make install DESTDIR=/tmp/mdbtools-install
 
