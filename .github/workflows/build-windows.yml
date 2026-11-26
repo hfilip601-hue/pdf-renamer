@@ -34,44 +34,34 @@ jobs:
             git
             python
             python-pip
-            p7zip
           update: true
           cache: false
 
-      - name: Download pre-built mdbtools Windows binaries
+      - name: Install mdbtools from MSYS2 package
         run: |
-          # Download pre-built mdbtools from GitHub releases (avoids compilation issues)
-          cd /tmp
-          curl -L -o mdbtools.zip https://github.com/mdbtools/mdbtools/releases/download/v1.0.1/mdbtools-1.0.1-win32.zip
-          7z x mdbtools.zip -omdbtools-extracted
+          # Install mdbtools from MSYS2 UCRT64 repository
+          pacman -S --noconfirm mingw-w64-ucrt-x86_64-mdbtools
 
-          # Find the extracted structure
-          find mdbtools-extracted -type f \( -name "mdb-*.exe" -o -name "*.dll" \) | head -30
+          # Verify installation
+          which mdb-export
+          which mdb-tables
+          which mdb-schema
 
-          # Copy to project structure
+          # Copy to project structure for bundling
           mkdir -p mdbtools/bin
           mkdir -p mdbtools/lib
 
-          # Copy executables and DLLs (adjust path based on actual zip structure)
-          find mdbtools-extracted -name "mdb-*.exe" -exec cp {} mdbtools/bin/ \;
-          find mdbtools-extracted -name "*.dll" -exec cp {} mdbtools/lib/ \;
+          # Copy executables
+          cp /ucrt64/bin/mdb-export.exe mdbtools/bin/
+          cp /ucrt64/bin/mdb-tables.exe mdbtools/bin/
+          cp /ucrt64/bin/mdb-schema.exe mdbtools/bin/
 
-          # Also copy DLLs to root for fallback
-          cp mdbtools/lib/*.dll mdbtools/ 2>/dev/null || true
+          # Copy all DLLs from ucrt64/bin that mdbtools might need
+          cp /ucrt64/bin/*.dll mdbtools/lib/
+          cp /ucrt64/bin/*.dll mdbtools/
 
-          echo "mdbtools downloaded and extracted successfully"
+          echo "mdbtools installed and copied successfully"
           find mdbtools -type f | sort
-
-      - name: Copy mdbtools to project for bundling
-        run: |
-          # Files already copied in previous step, just verify
-          if [ -f "mdbtools/bin/mdb-export.exe" ] && [ -f "mdbtools/bin/mdb-tables.exe" ]; then
-            echo "mdbtools ready for bundling"
-            find mdbtools -type f | sort
-          else
-            echo "ERROR: mdbtools executables not found"
-            exit 1
-          fi
 
       - name: Install Python dependencies
         run: |
