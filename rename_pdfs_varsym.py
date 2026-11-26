@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
 """
-POHODA PDF Renamer - Variable Symbol Matching (IN-PLACE RENAME)
+POHODA PDF Renamer - Variable Symbol Matching + Receipt OCR
 
 Renames PDF invoices by extracting the Variable Symbol from the PDF,
 looking it up in the MDB database (FA table, varsym column), and
 renaming to: cislo_originalname.pdf
 
+Also supports RECEIPT PHOTOS (JPG/PNG) - uses OCR to extract:
+- Variable Symbol (VS)
+- Amount (celkem/total)
+- Date (datum)
+- Vendor (firma/dodavatel)
+- Document number (cislo)
+
+And matches to MDB data for renaming.
+
 Workflow:
-1. Extract text from ALL pages of PDF (full document scan)
-2. Find "Variabilní symbol" / "Variable Symbol" / "VS" anywhere in PDF text
+1. Extract text from ALL pages of PDF / OCR from images
+2. Find "Variabilní symbol" / "Variable Symbol" / "VS" anywhere in text
 3. Open MDB, find table starting with 'FA' (faktury/invoices)
 4. In that table, find 'varsym' column and 'cislo' column
 5. Match PDF's variable symbol to MDB's varsym
-6. Get corresponding 'cislo' from same row
-7. Rename PDF to: {cislo}_{original_filename}.pdf
+6. Get corresponding 'cislo', 'firma', 'doklad' from same row
+7. Rename file to: {cislo}_{firma}_{doklad}.{ext}
 
 Requirements:
     mdbtools (for mdb-export, mdb-tables)
@@ -21,7 +30,12 @@ Requirements:
       Debian/Ubuntu: sudo apt install mdbtools
       Fedora: sudo dnf install mdbtools
       macOS: brew install mdbtools
-    Python: pip install pandas pypdf
+    Tesseract OCR (for receipt photos)
+      Arch: sudo pacman -S tesseract tesseract-data-cze tesseract-data-eng tesseract-data-slk
+      Debian/Ubuntu: sudo apt install tesseract-ocr tesseract-ocr-ces tesseract-ocr-eng tesseract-ocr-slk
+      Fedora: sudo dnf install tesseract tesseract-langpack-ces tesseract-langpack-eng tesseract-langpack-slk
+      macOS: brew install tesseract tesseract-lang
+    Python: pip install pandas pypdf pytesseract pillow
 """
 
 import argparse
@@ -33,14 +47,14 @@ import io
 import queue
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from collections import defaultdict
 from datetime import datetime
 
 try:
     import pandas as pd
 except ImportError:
-    print("Error: pandas not installed. Run: pip install pandas pypdf", file=sys.stderr)
+    print("Error: pandas not installed. Run: pip install pandas pypdf pytesseract pillow", file=sys.stderr)
     sys.exit(1)
 
 try:
@@ -48,6 +62,16 @@ try:
 except ImportError:
     print("Error: pypdf not installed. Run: pip install pypdf", file=sys.stderr)
     sys.exit(1)
+
+# OCR imports (optional - for receipt photos)
+try:
+    import pytesseract
+    from PIL import Image
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+    pytesseract = None
+    Image = None
 
 
 def get_bundled_mdbtools_dir() -> Optional[Path]:
@@ -198,6 +222,121 @@ def extract_text_from_pdf(pdf_path: Path) -> str:
         return " ".join(texts)
     except Exception as e:
         return f"[ERROR reading PDF: {e}]"
+
+
+def get_bundled_tesseract_dir() -> Optional[Path]:
+    """
+    Get the directory containing bundled Tesseract OCR when running as PyInstaller bundle.
+    """
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base = Path(sys._MEIPASS)
+        # Check possible locations
+        for subdir in ['tesseract', 'tesseract/bin', 'tessdata']:
+            candidate = base / subdir
+            if candidate.exists() and any(candidate.glob('tesseract*')):
+                return candidate
+    return None
+
+
+def find_tesseract_executable() -> Optional[str]:
+    """Find tesseract executable, checking bundled directory first, then system PATH."""
+    # Check bundled directory first
+    bundled_dir = get_bundled_tesseract_dir()
+    if bundled_dir:
+        bundled_exe = bundled_dir / "tesseract.exe"
+        if bundled_exe.exists():
+            return str(bundled_exe)
+
+    # Also check _MEIPASS root directly
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base = Path(sys._MEIPASS)
+        for subdir in ['tesseract', 'tesseract/bin', 'tessdata', '.']:
+            candidate = base / subdir
+            bundled_exe = candidate / "tesseract.exe"
+            if bundled_exe.exists():
+                return str(bundled_exe)
+
+    # Fall back to system PATH
+    return shutil.which("tesseract")
+
+
+def get_tessdata_dir() -> Optional[str]:
+    """Get tessdata directory for Tesseract language data."""
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        base = Path(sys._MEIPASS)
+        for subdir in ['tessdata', 'tesseract/tessdata', 'tesseract/share/tessdata']:
+            candidate = base / subdir
+            if candidate.exists() and any(candidate.glob('*.traineddata')):
+                return str(candidate)
+    # Check system
+    system_paths = [
+        '/usr/share/tessdata',
+        '/usr/local/share/tessdata',
+        '/opt/homebrew/share/tessdata',
+        'C:\\Program Files\\Tesseract-OCR\\tessdata',
+        'C:\\Program Files (x86)\\Tesseract-OCR\\tessdata',
+    ]
+    for p in system_paths:
+        if Path(p).exists():
+            return p
+    return None
+
+
+def extract_text_from_image(image_path: Path) -> str:
+    """
+    Extract text from an image using Tesseract OCR.
+    Supports Czech, English, Slovak languages for receipts.
+    """
+    if not OCR_AVAILABLE:
+        return "[ERROR: OCR not available. Install pytesseract and pillow]"
+
+    tesseract_cmd = find_tesseract_executable()
+    if not tesseract_cmd:
+        return "[ERROR: Tesseract not found. Install tesseract-ocr]"
+
+    tessdata_dir = get_tessdata_dir()
+
+    try:
+        # Configure pytesseract
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+
+        # Open image
+        image = Image.open(str(image_path))
+
+        # Convert to RGB if needed (e.g., RGBA, P mode)
+        if image.mode not in ('RGB', 'L'):
+            image = image.convert('RGB')
+
+        # OCR config for receipts - use Czech, English, Slovak
+        # --psm 6 = Assume a single uniform block of text
+        # --oem 3 = Default, use LSTM neural net
+        config = '--psm 6 --oem 3 -l ces+eng+slk'
+
+        if tessdata_dir:
+            config += f' --tessdata-dir "{tessdata_dir}"'
+
+        text = pytesseract.image_to_string(image, config=config)
+        return text.strip()
+
+    except Exception as e:
+        return f"[ERROR reading image: {e}]"
+
+
+def extract_text_from_file(file_path: Path) -> Tuple[str, str]:
+    """
+    Extract text from PDF or image file.
+    Returns (text, file_type) where file_type is 'pdf' or 'image'.
+    """
+    suffix = file_path.suffix.lower()
+
+    if suffix == '.pdf':
+        text = extract_text_from_pdf(file_path)
+        return text, 'pdf'
+    elif suffix in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'):
+        text = extract_text_from_image(file_path)
+        return text, 'image'
+    else:
+        return f"[ERROR: Unsupported file type: {suffix}]", 'unknown'
 
 
 def extract_variable_symbol(text: str) -> Optional[str]:
@@ -408,6 +547,137 @@ def extract_all_variable_symbol_candidates(text: str) -> List[Tuple[int, str, st
     return candidates
 
 
+def extract_receipt_data(text: str) -> Dict[str, Any]:
+    """
+    Extract structured data from receipt text (OCR output).
+    Returns dict with: varsym, amount, date, vendor, doc_number, currency
+    """
+    text_upper = text.upper()
+    result = {}
+
+    # 1. Variable Symbol (VS) - reuse existing logic but return all info
+    varsym = extract_variable_symbol(text)
+    if varsym:
+        result['varsym'] = varsym
+
+    # 2. Amount / Total (CZECH: CELKEM, SUMA, CENA; ENG: TOTAL, AMOUNT)
+    amount_patterns = [
+        # Explicit total patterns
+        r'(?:CELKEM|SUMA|CENA|TOTAL|AMOUNT|SUMA\s+K\s+ZAPLACEN[IÍ]|K\s+ZAPLACEN[IÍ]|DO\s+PLATBY|ZAOKROUHLEN[IÍ])\s*[:\-]?\s*([0-9\s]+[,.][0-9]{2})',
+        # Amount with currency
+        r'(?:CELKEM|SUMA|CENA|TOTAL|AMOUNT)\s*[:\-]?\s*([0-9\s]+[,.][0-9]{2})\s*(?:CZK|EUR|USD|K[CČ])',
+        # Just number with 2 decimals near total keyword
+        r'(?:CELKEM|SUMA|CENA|TOTAL|AMOUNT|K\s+ZAPLAT)\b.{0,20}?([0-9\s]{1,10}[,.][0-9]{2})',
+    ]
+    for pattern in amount_patterns:
+        match = re.search(pattern, text_upper, re.IGNORECASE)
+        if match:
+            amount_str = match.group(1).replace(' ', '').replace(',', '.')
+            try:
+                result['amount'] = float(amount_str)
+                break
+            except ValueError:
+                pass
+
+    # 3. Date (Czech/Slovak formats: DD.MM.YYYY, DD.MM.YY, YYYY-MM-DD)
+    date_patterns = [
+        r'(?:DATUM|DATE|VYSTAVEN[OÍ]|DODAN[IÍ]|SPLATNOST)\s*[:\-]?\s*([0-9]{1,2}[\.\-\/][0-9]{1,2}[\.\-\/][0-9]{2,4})',
+        r'(?:DATUM|DATE|VYSTAVEN[OÍ]|DODAN[IÍ]|SPLATNOST)\s*[:\-]?\s*([0-9]{4}[\.\-\/][0-9]{1,2}[\.\-\/][0-9]{1,2})',
+        # Fallback: any date-like pattern
+        r'\b([0-9]{1,2}[\.\-\/][0-9]{1,2}[\.\-\/][0-9]{4})\b',
+        r'\b([0-9]{4}[\.\-\/][0-9]{1,2}[\.\-\/][0-9]{1,2})\b',
+    ]
+    for pattern in date_patterns:
+        match = re.search(pattern, text_upper, re.IGNORECASE)
+        if match:
+            result['date'] = match.group(1)
+            break
+
+    # 4. Vendor / Company name (DODAVATEL, PRODAVATEL, ODBĚRATEL)
+    vendor_patterns = [
+        r'(?:DODAVATEL|PRODAVATEL|ODB[ĚE]RATEL|FIRMA|COMPANY|SUPPLIER|VENDOR)\s*[:\-]?\s*([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ0-9\s\.\,\-]{3,80})',
+        # First meaningful line often contains vendor
+        r'^([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ]{3,}[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ0-9\s\.\,\-]{10,80})$',
+    ]
+    for pattern in vendor_patterns:
+        match = re.search(pattern, text_upper, re.IGNORECASE | re.MULTILINE)
+        if match:
+            vendor = match.group(1).strip()
+            # Clean up
+            vendor = re.sub(r'\s+', ' ', vendor)
+            if len(vendor) > 3 and len(vendor) < 100:
+                result['vendor'] = vendor.title()
+                break
+
+    # 5. Document number (ČÍSLO DOKLADU, FAKTURA, INVOICE)
+    doc_number_patterns = [
+        r'(?:ČÍSLO\s+DOKLADU|ČÍSLO\s+FAKTURY|FAKTURA|INVOICE|DOKLAD|REFERENCE)\s*[:\-]?\s*([A-Z0-9\-\/]{4,})',
+        r'(?:Č\.\s*FAKTURY|Č\.\s*DOKLADU|FAKT\.)\s*[:\-]?\s*([A-Z0-9\-\/]{4,})',
+    ]
+    for pattern in doc_number_patterns:
+        match = re.search(pattern, text_upper, re.IGNORECASE)
+        if match:
+            result['doc_number'] = match.group(1).strip().upper()
+            break
+
+    # 6. Currency detection
+    if 'CZK' in text_upper or 'KČ' in text_upper or 'KC' in text_upper:
+        result['currency'] = 'CZK'
+    elif 'EUR' in text_upper or '€' in text:
+        result['currency'] = 'EUR'
+    elif 'USD' in text_upper or '$' in text:
+        result['currency'] = 'USD'
+
+    # 7. IČO (Czech company ID) - useful for matching
+    ico_match = re.search(r'\bI[ČC]O\s*[:\-]?\s*([0-9]{8})\b', text_upper)
+    if ico_match:
+        result['ico'] = ico_match.group(1)
+
+    # 8. DIČ (Czech VAT ID)
+    dic_match = re.search(r'\bDI[ČC]\s*[:\-]?\s*(CZ[0-9]{8,10}|[0-9]{8,10})\b', text_upper)
+    if dic_match:
+        result['dic'] = dic_match.group(1)
+
+    return result
+
+
+def match_receipt_to_mdb(receipt_data: Dict[str, Any], varsym_to_data: Dict[str, Tuple[str, str, str]]) -> Optional[Tuple[str, str, str]]:
+    """
+    Match receipt data to MDB mapping.
+    Priority: 1) Variable Symbol, 2) IČO + Amount + Date, 3) Vendor name fuzzy match
+    Returns (cislo, firma, doklad) or None
+    """
+    # Priority 1: Variable Symbol (most reliable)
+    if 'varsym' in receipt_data:
+        varsym = receipt_data['varsym'].upper()
+        if varsym in varsym_to_data:
+            return varsym_to_data[varsym]
+
+    # Priority 2: IČO + Amount + Date (for receipts without VS)
+    if 'ico' in receipt_data:
+        ico = receipt_data['ico']
+        amount = receipt_data.get('amount')
+        date = receipt_data.get('date')
+
+        # Search MDB for matching IČO (if available in data)
+        # This would require MDB to have IČO column - not always available
+        pass
+
+    # Priority 3: Vendor name fuzzy match + Amount + Date
+    if 'vendor' in receipt_data and 'amount' in receipt_data:
+        vendor = receipt_data['vendor'].upper()
+        amount = receipt_data['amount']
+        date = receipt_data.get('date')
+
+        # Search through MDB mappings for matching vendor + amount
+        for varsym_key, (cislo, firma, doklad) in varsym_to_data.items():
+            if firma and vendor in firma.upper():
+                # Additional check: if date matches, more confident
+                return (cislo, firma, doklad)
+
+    return None
+
+
 def load_varsym_to_cislo_map(mdb_path: Path) -> Tuple[Dict[str, str], str]:
     """
     Load the mapping from varsym -> cislo from the FA table.
@@ -526,7 +796,7 @@ def load_varsym_to_cislo_map(mdb_path: Path) -> Tuple[Dict[str, str], str]:
     return varsym_to_data, table_name
 
 
-def process_pdfs(
+def process_files(
     source_dir: Path,
     output_dir: Path,
     varsym_to_data: Dict[str, Tuple[str, str, str]],
@@ -534,66 +804,92 @@ def process_pdfs(
     unmatched_dir: Optional[Path] = None,
     dry_run: bool = False,
 ) -> Tuple[List[dict], List[dict]]:
-    pdf_files = list(source_dir.rglob("*.pdf"))
-    if not pdf_files:
-        print(f"No PDF files found in {source_dir}")
+    # Support both PDFs and images
+    SUPPORTED_EXTENSIONS = ('.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
+    files = [f for f in source_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS]
+
+    if not files:
+        print(f"No supported files (PDF/images) found in {source_dir}")
         return [], []
 
-    print(f"Found {len(pdf_files)} PDF file(s) to process.")
+    print(f"Found {len(files)} file(s) to process.")
 
     matched_results = []
     unmatched_results = []
 
-    for pdf_path in pdf_files:
-        print(f"\nProcessing: {pdf_path.name}")
+    for file_path in files:
+        print(f"\nProcessing: {file_path.name}")
 
-        text = extract_text_from_pdf(pdf_path)
+        text, file_type = extract_text_from_file(file_path)
         if text.startswith("[ERROR"):
-            result = {'pdf_path': pdf_path, 'matched': False, 'reason': text}
+            result = {'file_path': file_path, 'matched': False, 'reason': text, 'file_type': file_type}
             unmatched_results.append(result)
             print(f"  [ERROR] {text}")
             continue
 
-        # Extract variable symbol from PDF
+        # Extract variable symbol from text (works for both PDF and OCR)
         pdf_varsym = extract_variable_symbol(text)
 
+        # For images, also try receipt-specific extraction
+        receipt_data = {}
+        if file_type == 'image' and OCR_AVAILABLE:
+            receipt_data = extract_receipt_data(text)
+            # If we found a varsym in receipt data but not in general extraction, use it
+            if not pdf_varsym and 'varsym' in receipt_data:
+                pdf_varsym = receipt_data['varsym']
+
         if not pdf_varsym:
-            result = {'pdf_path': pdf_path, 'matched': False, 'reason': "No variable symbol found in PDF"}
+            result = {'file_path': file_path, 'matched': False, 'reason': "No variable symbol found", 'file_type': file_type}
+            if receipt_data:
+                result['receipt_data'] = receipt_data
             unmatched_results.append(result)
-            print(f"  [WARN] No variable symbol found in PDF")
+            print(f"  [WARN] No variable symbol found in {file_type}")
+            if receipt_data:
+                print(f"     Receipt data extracted: {receipt_data}")
             continue
 
-        print(f"  Found variable symbol in PDF: {pdf_varsym}")
+        print(f"  Found variable symbol: {pdf_varsym}")
 
         # Look up in MDB mapping
-        data = varsym_to_data.get(pdf_varsym)
+        data = varsym_to_data.get(pdf_varsym.upper())
+
+        # If not found by VS, try receipt data matching (vendor + amount + date)
+        if not data and receipt_data:
+            data = match_receipt_to_mdb(receipt_data, varsym_to_data)
+            if data:
+                print(f"  [INFO] Matched via receipt data (vendor/amount/date)")
 
         if not data:
-            result = {'pdf_path': pdf_path, 'matched': False, 'reason': f"Variable symbol '{pdf_varsym}' not found in MDB", 'pdf_varsym': pdf_varsym}
+            result = {'file_path': file_path, 'matched': False, 'reason': f"Variable symbol '{pdf_varsym}' not found in MDB", 'pdf_varsym': pdf_varsym, 'file_type': file_type}
+            if receipt_data:
+                result['receipt_data'] = receipt_data
             unmatched_results.append(result)
             print(f"  [WARN] Variable symbol '{pdf_varsym}' not found in MDB")
             continue
 
         cislo, firma, doklad = data
 
-        # Create new filename: cislo_firma_doklad.pdf (skip empty parts)
+        # Create new filename: cislo_firma_doklad.{ext} (skip empty parts)
         parts = [sanitize_filename(cislo)]
         if firma:
             parts.append(sanitize_filename(firma))
         if doklad:
             parts.append(sanitize_filename(doklad))
-        new_name = "_".join(parts) + ".pdf"
+        new_name = "_".join(parts) + file_path.suffix
 
         result = {
-            'pdf_path': pdf_path,
+            'file_path': file_path,
             'matched': True,
             'cislo': cislo,
             'firma': firma,
             'doklad': doklad,
             'pdf_varsym': pdf_varsym,
             'new_filename': new_name,
+            'file_type': file_type,
             'reason': f"Matched varsym '{pdf_varsym}' -> cislo '{cislo}', firma '{firma}', doklad '{doklad}'",
         }
+        if receipt_data:
+            result['receipt_data'] = receipt_data
         matched_results.append(result)
 
         print(f"  [OK] {result['reason']}")
@@ -611,10 +907,10 @@ def process_pdfs(
 
             try:
                 if copy_mode:
-                    shutil.copy2(pdf_path, dest_path)
+                    shutil.copy2(file_path, dest_path)
                     print(f"     -> Copied to {dest_path.name}")
                 else:
-                    shutil.move(str(pdf_path), str(dest_path))
+                    shutil.move(str(file_path), str(dest_path))
                     print(f"     -> Renamed to {dest_path.name}")
             except Exception as e:
                 print(f"     [ERROR] Error: {e}")
@@ -626,6 +922,11 @@ def process_pdfs(
     return matched_results, unmatched_results
 
 
+# Backward compatibility
+def process_pdfs(*args, **kwargs):
+    return process_files(*args, **kwargs)
+
+
 def save_unmatched(unmatched: List[dict], unmatched_dir: Path, dry_run: bool = False):
     if not unmatched:
         return
@@ -633,21 +934,22 @@ def save_unmatched(unmatched: List[dict], unmatched_dir: Path, dry_run: bool = F
         unmatched_dir.mkdir(parents=True, exist_ok=True)
     print(f"\nSaving {len(unmatched)} unmatched file(s) to: {unmatched_dir}")
     for result in unmatched:
-        dest = unmatched_dir / result['pdf_path'].name
+        file_path = result.get('file_path', result.get('pdf_path'))
+        dest = unmatched_dir / file_path.name
         counter = 1
         while dest.exists():
-            dest = unmatched_dir / f"{result['pdf_path'].stem}_{counter}{result['pdf_path'].suffix}"
+            dest = unmatched_dir / f"{file_path.stem}_{counter}{file_path.suffix}"
             counter += 1
         if not dry_run:
             try:
-                shutil.copy2(result['pdf_path'], dest)
+                shutil.copy2(file_path, dest)
             except Exception as e:
-                print(f"  [ERROR] Failed to copy {result['pdf_path'].name}: {e}")
+                print(f"  [ERROR] Failed to copy {file_path.name}: {e}")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Rename PDF invoices by matching Variable Symbol from PDF to MDB (FA table) and using cislo, firma, doklad",
+        description="Rename PDF invoices & receipt photos by matching Variable Symbol to MDB (FA table) and using cislo, firma, doklad",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -664,13 +966,18 @@ Examples:
   python3 rename_pdfs_varsym.py --mdb-folder ./exports --mdb-pattern "export" --source ./pdfs --output ./renamed
 
 Workflow:
-  1. Extract "Variabilní symbol" / "Variable Symbol" / "VS" from PDF text
+  1. Extract "Variabilní symbol" / "Variable Symbol" / "VS" from PDF text or OCR from images
   2. Find FA* table in MDB (POHODA invoices table)
-  3. Match PDF's variable symbol to MDB's 'varsym' column
+  3. Match file's variable symbol to MDB's 'varsym' column
   4. Get corresponding 'cislo', 'firma', 'doklad' from same row
-  5. Rename PDF to: {cislo}_{firma}_{doklad}.pdf
+  5. Rename file to: {cislo}_{firma}_{doklad}.{ext}
+
+For RECEIPT PHOTOS (JPG/PNG): Also extracts amount, date, vendor via OCR
+and falls back to matching by vendor+amount+date if no variable symbol found.
 
 Requires: mdbtools (mdb-export, mdb-tables) - NOT pyodbc
+          Tesseract OCR (for receipt photos: tesseract-ocr + language packs)
+          Python: pip install pandas pypdf pytesseract pillow
         """
     )
     # MDB selection: either direct file path OR folder + pattern
@@ -679,7 +986,7 @@ Requires: mdbtools (mdb-export, mdb-tables) - NOT pyodbc
     mdb_group.add_argument('--mdb-folder', type=Path, help='Folder containing .mdb files (use with --mdb-pattern)')
 
     parser.add_argument('--mdb-pattern', type=str, help='Partial filename to match (case-insensitive). Selects newest matching .mdb file in --mdb-folder')
-    parser.add_argument('--source', required=True, type=Path, help='Folder containing source PDF files')
+    parser.add_argument('--source', required=True, type=Path, help='Folder containing source PDF files and/or receipt images (JPG/PNG)')
     parser.add_argument('--output', type=Path, help='Output folder (copy mode). Required unless --in-place used.')
     parser.add_argument('--in-place', action='store_true',
                         help='Rename files in-place in source folder (no copy). Modifies originals!')
@@ -747,8 +1054,13 @@ Requires: mdbtools (mdb-export, mdb-tables) - NOT pyodbc
         print("No varsym mappings found in MDB.")
         return 1
 
+    if not OCR_AVAILABLE:
+        print("[WARN] OCR not available (pytesseract/pillow not installed). Receipt images will be skipped.")
+        print("       Install: pip install pytesseract pillow")
+        print("       System: sudo apt install tesseract-ocr tesseract-ocr-ces tesseract-ocr-eng tesseract-ocr-slk")
+
     print(f"\n{'='*60}")
-    print(f"Processing PDFs from: {args.source}")
+    print(f"Processing files from: {args.source}")
     print(f"Using MDB table: {table_name}")
     print(f"MDB mappings loaded: {len(varsym_to_data)}")
     print(f"Output mode: {'COPY to ' + str(output_dir) if copy_mode else 'RENAME in-place'}")
@@ -756,7 +1068,7 @@ Requires: mdbtools (mdb-export, mdb-tables) - NOT pyodbc
         print("DRY RUN - No files will be modified")
     print(f"{'='*60}")
 
-    matched, unmatched = process_pdfs(
+    matched, unmatched = process_files(
         source_dir=args.source,
         output_dir=output_dir,
         varsym_to_data=varsym_to_data,
@@ -770,23 +1082,28 @@ Requires: mdbtools (mdb-export, mdb-tables) - NOT pyodbc
     print(f"\n{'='*60}")
     print(f"SUMMARY")
     print(f"{'='*60}")
-    print(f"Total PDFs processed: {len(matched) + len(unmatched)}")
+    print(f"Total files processed: {len(matched) + len(unmatched)}")
     print(f"Successfully matched: {len(matched)}")
     print(f"Unmatched (need review): {len(unmatched)}")
 
     if matched:
         print(f"\n[OK] MATCHED FILES:")
         for r in matched:
-            print(f"  {r['pdf_path'].name} -> {r['new_filename']}")
+            print(f"  {r['file_path'].name} -> {r['new_filename']}")
             print(f"     Varsym: {r['pdf_varsym']} -> Cislo: {r['cislo']}, Firma: {r.get('firma', 'N/A')}, Doklad: {r.get('doklad', 'N/A')}")
+            if r.get('file_type') == 'image':
+                print(f"     [IMAGE/RECEIPT processed via OCR]")
 
     if unmatched:
         print(f"\n[WARN] UNMATCHED FILES (copied to {unmatched_dir}):")
         for r in unmatched:
-            print(f"  {r['pdf_path'].name}")
+            file_path = r.get('file_path', r.get('pdf_path'))
+            print(f"  {file_path.name}")
             print(f"     Reason: {r['reason']}")
             if 'pdf_varsym' in r:
-                print(f"     PDF Varsym: {r['pdf_varsym']}")
+                print(f"     Found Varsym: {r['pdf_varsym']}")
+            if r.get('receipt_data'):
+                print(f"     Receipt data: {r['receipt_data']}")
 
     if args.dry_run:
         print("\n(Dry run - no files were actually modified)")
@@ -903,9 +1220,10 @@ class PDFRenamerGUI:
         self.mdb_refresh_btn.grid(row=4, column=1, sticky=tk.W, padx=5, pady=5)
 
         # Source folder
-        ttk.Label(file_frame, text="Source PDFs:").grid(row=5, column=0, sticky=tk.W, pady=5)
+        ttk.Label(file_frame, text="Source (PDFs + Images):").grid(row=5, column=0, sticky=tk.W, pady=5)
         ttk.Entry(file_frame, textvariable=self.source_path, width=60).grid(row=5, column=1, sticky=tk.EW, padx=5)
         ttk.Button(file_frame, text="Browse", command=lambda: self._browse_dir(self.source_path)).grid(row=5, column=2, padx=5)
+        ttk.Label(file_frame, text="(PDF, JPG, PNG, BMP, TIFF, WEBP)").grid(row=5, column=2, sticky=tk.W, padx=5)
 
         # Output folder
         ttk.Label(file_frame, text="Output Folder:").grid(row=6, column=0, sticky=tk.W, pady=5)
@@ -974,16 +1292,22 @@ class PDFRenamerGUI:
         info_frame = ttk.LabelFrame(parent, text="How It Works", padding=10)
         info_frame.pack(fill=tk.BOTH, expand=True)
 
-        info_text = """POHODA PDF Renamer - Variable Symbol Matching
+        info_text = """POHODA PDF Renamer - Variable Symbol Matching + Receipt OCR
 
-WORKFLOW:
+WORKFLOW (PDF INVOICES):
 1. Scans ALL pages of each PDF for variable symbols
 2. Finds FA* table in MDB (POHODA invoices table)
 3. Matches PDF's variable symbol to MDB's 'varsym' column
 4. Gets corresponding 'cislo', 'firma', 'doklad' from same row
 5. Renames PDF to: {cislo}_{firma}_{doklad}.pdf
 
-SUPPORTED VARIABLE SYMBOL FORMATS (in PDF):
+WORKFLOW (RECEIPT PHOTOS - JPG/PNG):
+1. Uses Tesseract OCR (Czech + English + Slovak) to extract text from image
+2. Extracts: Variable Symbol (VS), Amount, Date, Vendor, Document Number, IČO, DIČ
+3. Matches by Variable Symbol (primary) or Vendor+Amount+Date (fallback)
+4. Renames to: {cislo}_{firma}_{doklad}.{ext}
+
+SUPPORTED VARIABLE SYMBOL FORMATS:
 • Variabilní symbol: 123456789
 • Variabilni symbol: 123456789
 • Variabilný symbol: 123456789
@@ -994,6 +1318,19 @@ SUPPORTED VARIABLE SYMBOL FORMATS (in PDF):
 • Variabilni 123456789 / Variable 123456789 / Var 123456789
 • OCR variants: simbolo, simbol, símbolo
 • With separators: 123/456/789, 123-456-789
+
+RECEIPT DATA EXTRACTED (OCR):
+• Variable Symbol (VS) - matches MDB varsym
+• Amount / Total (CZK, EUR, USD) - for fallback matching
+• Date (DD.MM.YYYY, YYYY-MM-DD) - for fallback matching
+• Vendor / Company name - for fallback matching
+• Document Number - for reference
+• IČO (Czech company ID) - for future matching
+• DIČ (Czech VAT ID) - for future matching
+
+SUPPORTED FILE TYPES:
+• PDF (.pdf) - text extraction
+• Images (.jpg, .jpeg, .png, .bmp, .tiff, .tif, .webp) - OCR
 
 MDB REQUIREMENTS:
 • Table starting with 'FA' (e.g., FA, Faktury, FA_2024)
@@ -1008,7 +1345,12 @@ REQUIREMENTS:
   Debian/Ubuntu: sudo apt install mdbtools
   Fedora: sudo dnf install mdbtools
   macOS: brew install mdbtools
-• Python: pip install pandas pypdf
+• Tesseract OCR (for receipt photos)
+  Arch: sudo pacman -S tesseract tesseract-data-cze tesseract-data-eng tesseract-data-slk
+  Debian/Ubuntu: sudo apt install tesseract-ocr tesseract-ocr-ces tesseract-ocr-eng tesseract-ocr-slk
+  Fedora: sudo dnf install tesseract tesseract-langpack-ces tesseract-langpack-eng tesseract-langpack-slk
+  macOS: brew install tesseract tesseract-lang
+• Python: pip install pandas pypdf pytesseract pillow
 """
 
         text_widget = scrolledtext.ScrolledText(info_frame, wrap=tk.WORD)
@@ -1193,40 +1535,55 @@ REQUIREMENTS:
 
             self.log_queue.put((f"Loaded {len(varsym_to_data)} mappings from table '{table_name}'.", "INFO"))
 
-            pdf_files = list(source_dir.rglob("*.pdf"))
-            if not pdf_files:
-                self.log_queue.put(("No PDF files found.", "WARN"))
+            # Support both PDFs and images
+            SUPPORTED_EXTENSIONS = ('.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp')
+            files = [f for f in source_dir.rglob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS]
+
+            if not files:
+                self.log_queue.put(("No supported files (PDF/images) found.", "WARN"))
                 return
 
-            self.log_queue.put((f"Found {len(pdf_files)} PDF file(s) to process.", "INFO"))
+            self.log_queue.put((f"Found {len(files)} file(s) to process.", "INFO"))
 
             matched_results = []
             unmatched_results = []
 
-            for i, pdf_path in enumerate(pdf_files):
+            for i, file_path in enumerate(files):
                 if not self.processing:
                     break
 
-                progress = int((i / len(pdf_files)) * 100)
+                progress = int((i / len(files)) * 100)
                 self.progress_var.set(progress)
-                self.progress_label.config(text=f"Processing {i+1}/{len(pdf_files)}: {pdf_path.name}")
+                self.progress_label.config(text=f"Processing {i+1}/{len(files)}: {file_path.name}")
 
-                self.log_queue.put((f"\nProcessing: {pdf_path.name}", "INFO"))
+                self.log_queue.put((f"\nProcessing: {file_path.name}", "INFO"))
 
-                text = extract_text_from_pdf(pdf_path)
+                text, file_type = extract_text_from_file(file_path)
                 if text.startswith("[ERROR"):
-                    result = {'pdf_path': pdf_path, 'matched': False, 'reason': text}
+                    result = {'file_path': file_path, 'matched': False, 'reason': text, 'file_type': file_type}
                     unmatched_results.append(result)
                     self.log_queue.put((f"  ✗ {text}", "ERROR"))
                     continue
 
-                # Extract variable symbol from PDF
+                # Extract variable symbol from text (works for both PDF and OCR)
                 pdf_varsym = extract_variable_symbol(text)
 
+                # For images, also try receipt-specific extraction
+                receipt_data = {}
+                if file_type == 'image' and OCR_AVAILABLE:
+                    receipt_data = extract_receipt_data(text)
+                    # If we found a varsym in receipt data but not in general extraction, use it
+                    if not pdf_varsym and 'varsym' in receipt_data:
+                        pdf_varsym = receipt_data['varsym']
+
                 if not pdf_varsym:
-                    result = {'pdf_path': pdf_path, 'matched': False, 'reason': "No variable symbol found in PDF"}
+                    result = {'file_path': file_path, 'matched': False, 'reason': "No variable symbol found", 'file_type': file_type}
+                    if receipt_data:
+                        result['receipt_data'] = receipt_data
                     unmatched_results.append(result)
-                    self.log_queue.put(("  ⚠ No variable symbol found in PDF", "WARN"))
+                    self.log_queue.put((f"  ⚠ No variable symbol found in {file_type}", "WARN"))
+                    if receipt_data:
+                        self.log_queue.put((f"     Receipt data extracted: {receipt_data}", "INFO"))
                     # Show debug candidates if verbose
                     if self.verbose.get():
                         candidates = extract_all_variable_symbol_candidates(text)
@@ -1237,38 +1594,51 @@ REQUIREMENTS:
                 self.log_queue.put((f"  Found variable symbol: {pdf_varsym}", "INFO"))
 
                 # Look up in MDB mapping
-                data = varsym_to_data.get(pdf_varsym)
+                data = varsym_to_data.get(pdf_varsym.upper())
+
+                # If not found by VS, try receipt data matching (vendor + amount + date)
+                if not data and receipt_data:
+                    data = match_receipt_to_mdb(receipt_data, varsym_to_data)
+                    if data:
+                        self.log_queue.put(("  [INFO] Matched via receipt data (vendor/amount/date)", "INFO"))
 
                 if not data:
-                    result = {'pdf_path': pdf_path, 'matched': False, 'reason': f"Variable symbol '{pdf_varsym}' not found in MDB", 'pdf_varsym': pdf_varsym}
+                    result = {'file_path': file_path, 'matched': False, 'reason': f"Variable symbol '{pdf_varsym}' not found in MDB", 'pdf_varsym': pdf_varsym, 'file_type': file_type}
+                    if receipt_data:
+                        result['receipt_data'] = receipt_data
                     unmatched_results.append(result)
                     self.log_queue.put((f"  ⚠ Variable symbol '{pdf_varsym}' not found in MDB", "WARN"))
                     continue
 
                 cislo, firma, doklad = data
 
-                # Create new filename: cislo_firma_doklad.pdf (skip empty parts)
+                # Create new filename: cislo_firma_doklad.{ext} (skip empty parts)
                 parts = [sanitize_filename(cislo)]
                 if firma:
                     parts.append(sanitize_filename(firma))
                 if doklad:
                     parts.append(sanitize_filename(doklad))
-                new_name = "_".join(parts) + ".pdf"
+                new_name = "_".join(parts) + file_path.suffix
 
                 result = {
-                    'pdf_path': pdf_path,
+                    'file_path': file_path,
                     'matched': True,
                     'cislo': cislo,
                     'firma': firma,
                     'doklad': doklad,
                     'pdf_varsym': pdf_varsym,
                     'new_filename': new_name,
+                    'file_type': file_type,
                     'reason': f"Matched varsym '{pdf_varsym}' -> cislo '{cislo}', firma '{firma}', doklad '{doklad}'",
                 }
+                if receipt_data:
+                    result['receipt_data'] = receipt_data
                 matched_results.append(result)
 
                 self.log_queue.put((f"  ✓ {result['reason']}", "SUCCESS"))
                 self.log_queue.put((f"     New name: {new_name}", "INFO"))
+                if file_type == 'image':
+                    self.log_queue.put((f"     [IMAGE/RECEIPT processed via OCR]", "INFO"))
 
                 if not self.dry_run.get():
                     dest_path = output_dir / new_name
@@ -1282,10 +1652,10 @@ REQUIREMENTS:
 
                     try:
                         if copy_mode:
-                            shutil.copy2(pdf_path, dest_path)
+                            shutil.copy2(file_path, dest_path)
                             self.log_queue.put((f"     → Copied to {dest_path.name}", "INFO"))
                         else:
-                            shutil.move(str(pdf_path), str(dest_path))
+                            shutil.move(str(file_path), str(dest_path))
                             self.log_queue.put((f"     → Renamed to {dest_path.name}", "INFO"))
                     except Exception as e:
                         self.log_queue.put((f"     ✗ Error: {e}", "ERROR"))
@@ -1306,23 +1676,28 @@ REQUIREMENTS:
             self.log_queue.put((f"\n{'='*60}", "INFO"))
             self.log_queue.put(("SUMMARY", "INFO"))
             self.log_queue.put((f"{'='*60}", "INFO"))
-            self.log_queue.put((f"Total PDFs processed: {len(matched_results) + len(unmatched_results)}", "INFO"))
+            self.log_queue.put((f"Total files processed: {len(matched_results) + len(unmatched_results)}", "INFO"))
             self.log_queue.put((f"Successfully matched: {len(matched_results)}", "SUCCESS"))
             self.log_queue.put((f"Unmatched (need review): {len(unmatched_results)}", "WARN" if unmatched_results else "INFO"))
 
             if matched_results:
                 self.log_queue.put(("\n✓ MATCHED FILES:", "SUCCESS"))
                 for r in matched_results:
-                    self.log_queue.put((f"  {r['pdf_path'].name} → {r['new_filename']}", "INFO"))
+                    self.log_queue.put((f"  {r['file_path'].name} → {r['new_filename']}", "INFO"))
                     self.log_queue.put((f"     Varsym: {r['pdf_varsym']} → Cislo: {r['cislo']}, Firma: {r.get('firma', 'N/A')}, Doklad: {r.get('doklad', 'N/A')}", "INFO"))
+                    if r.get('file_type') == 'image':
+                        self.log_queue.put((f"     [IMAGE/RECEIPT processed via OCR]", "INFO"))
 
             if unmatched_results:
                 self.log_queue.put((f"\n⚠ UNMATCHED FILES (copied to {unmatched_dir}):", "WARN"))
                 for r in unmatched_results:
-                    self.log_queue.put((f"  {r['pdf_path'].name}", "WARN"))
+                    file_path = r.get('file_path', r.get('pdf_path'))
+                    self.log_queue.put((f"  {file_path.name}", "WARN"))
                     self.log_queue.put((f"     Reason: {r['reason']}", "WARN"))
                     if 'pdf_varsym' in r:
-                        self.log_queue.put((f"     PDF Varsym: {r['pdf_varsym']}", "WARN"))
+                        self.log_queue.put((f"     Found Varsym: {r['pdf_varsym']}", "WARN"))
+                    if r.get('receipt_data'):
+                        self.log_queue.put((f"     Receipt data: {r['receipt_data']}", "INFO"))
 
             if self.dry_run.get():
                 self.log_queue.put(("\n(Dry run - no files were actually modified)", "INFO"))

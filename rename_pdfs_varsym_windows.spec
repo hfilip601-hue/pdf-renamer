@@ -1,7 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Windows PyInstaller spec for rename_pdfs_varsym
-# This spec bundles mdbtools executables (mdb-export.exe, mdb-tables.exe, mdb-schema.exe)
-# and their required DLLs for a fully standalone .exe
+# This spec bundles:
+# - mdbtools executables (mdb-export.exe, mdb-tables.exe, mdb-schema.exe) + DLLs
+# - Tesseract OCR executable + tessdata language packs (ces, eng, slk)
 
 from PyInstaller.utils.hooks import collect_submodules
 import os
@@ -11,6 +12,9 @@ import sys
 hiddenimports = [
     'pandas',
     'pypdf',
+    'pytesseract',
+    'PIL',
+    'PIL.Image',
     'tkinter',
     'tkinter.ttk',
     'tkinter.filedialog',
@@ -20,31 +24,17 @@ hiddenimports = [
 hiddenimports += collect_submodules('pandas')
 
 # Path to mdbtools Windows binaries (DLLs and executables)
-# Expected structure (from Chocolatey or manual download):
-# mdbtools/
-#   bin/
-#     mdb-export.exe
-#     mdb-tables.exe
-#     mdb-schema.exe
-#   lib/
-#     *.dll (required DLLs)
-#   *.dll (some DLLs may also be in root)
-# Get the directory containing this spec file
 SPEC_DIR = os.path.dirname(os.path.abspath(sys.argv[0])) if '__file__' not in globals() else os.path.dirname(os.path.abspath(__file__))
 MDBTOOLS_DIR = os.path.join(SPEC_DIR, 'mdbtools')
+TESSERACT_DIR = os.path.join(SPEC_DIR, 'tesseract')
 
 binaries = []
 datas = []
 
+# Bundle mdbtools
 if os.path.exists(MDBTOOLS_DIR):
-    # Add entire mdbtools tree as datas - this preserves directory structure
-    # and ensures executables and DLLs are co-located in _MEIPASS/mdbtools/
-    # bin/ contains mdb-export.exe, mdb-tables.exe, mdb-schema.exe + DLLs
-    # lib/ contains additional DLLs
     datas.append((MDBTOOLS_DIR, 'mdbtools'))
     print(f"Bundling mdbtools from: {MDBTOOLS_DIR}")
-
-    # Print what we're bundling for verification
     for root, dirs, files in os.walk(MDBTOOLS_DIR):
         for f in files:
             rel_root = os.path.relpath(root, MDBTOOLS_DIR)
@@ -54,7 +44,21 @@ if os.path.exists(MDBTOOLS_DIR):
                 print(f"  mdbtools/{rel_root}/{f}")
 else:
     print(f"WARNING: mdbtools directory not found at {MDBTOOLS_DIR}")
-    print("The executable will require mdbtools to be installed on the target system.")
+
+# Bundle Tesseract OCR
+if os.path.exists(TESSERACT_DIR):
+    datas.append((TESSERACT_DIR, 'tesseract'))
+    print(f"Bundling Tesseract from: {TESSERACT_DIR}")
+    for root, dirs, files in os.walk(TESSERACT_DIR):
+        for f in files:
+            rel_root = os.path.relpath(root, TESSERACT_DIR)
+            if rel_root == '.':
+                print(f"  tesseract/{f}")
+            else:
+                print(f"  tesseract/{rel_root}/{f}")
+else:
+    print(f"WARNING: Tesseract directory not found at {TESSERACT_DIR}")
+    print("Receipt OCR will require Tesseract to be installed on the target system.")
 
 a = Analysis(
     ['rename_pdfs_varsym.py'],
